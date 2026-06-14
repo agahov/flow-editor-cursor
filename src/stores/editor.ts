@@ -2,17 +2,55 @@ import { defineStore } from 'pinia'
 import { nanoid } from 'nanoid'
 import { computed, ref, watch } from 'vue'
 import { createSampleFlowDoc } from '@/lib/sample-data'
-import type { GraphEdge, GraphNode, FlowDoc, NavigationLevel, NavigationState } from '@/types/flow'
-import type { Action, ActionKind, System } from '@/types/systems'
+import type {
+  GraphEdge,
+  GraphNode,
+  FlowDoc,
+  NavigationLevel,
+  NavigationState,
+  Process,
+} from '@/types/flow'
+import type { Action, ActionKind, OutputPin, System } from '@/types/systems'
 import type { TagDef, TagType } from '@/types/tags'
 
 const STORAGE_KEY = 'tag-flow-editor-doc'
+
+function defaultOutputPin(label = 'output'): OutputPin {
+  return { id: nanoid(), label, tagIds: [] }
+}
+
+/** Bring older / partial docs up to the current Process-centric shape. */
+function migrateDoc(raw: any): FlowDoc {
+  if (!raw || typeof raw !== 'object') return createSampleFlowDoc()
+
+  const systems: System[] = (raw.systems ?? []).map((s: any) => ({
+    ...s,
+    outputs: Array.isArray(s.outputs) && s.outputs.length > 0 ? s.outputs : [defaultOutputPin()],
+  }))
+
+  let processes: Process[] = Array.isArray(raw.processes) ? raw.processes : []
+  if (processes.length === 0 && raw.flow) {
+    processes = [{ id: nanoid(), name: 'Main', components: [], graph: raw.flow }]
+  }
+  for (const p of processes) {
+    if (!Array.isArray(p.components)) p.components = []
+    if (!p.graph) p.graph = { nodes: [], edges: [] }
+  }
+
+  return {
+    id: raw.id ?? nanoid(),
+    name: raw.name ?? 'Untitled',
+    tags: raw.tags ?? [],
+    systems,
+    processes,
+  }
+}
 
 function loadFromStorage(): FlowDoc | null {
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
     if (!raw) return null
-    return JSON.parse(raw) as FlowDoc
+    return migrateDoc(JSON.parse(raw))
   } catch {
     return null
   }
@@ -22,10 +60,38 @@ function saveToStorage(doc: FlowDoc) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(doc))
 }
 
+function actionNodeType(kind: ActionKind): string {
+  switch (kind) {
+    case 'text':
+      return 'textAction'
+    case 'addTags':
+      return 'addTagsAction'
+    case 'removeTags':
+      return 'removeTagsAction'
+    case 'changeComp':
+      return 'changeCompAction'
+  }
+}
+
+function createAction(kind: ActionKind): Action {
+  switch (kind) {
+    case 'text':
+      return { id: nanoid(), kind: 'text', message: 'New message' }
+    case 'addTags':
+      return { id: nanoid(), kind: 'addTags', tags: [] }
+    case 'removeTags':
+      return { id: nanoid(), kind: 'removeTags', tagIds: [] }
+    case 'changeComp':
+      return { id: nanoid(), kind: 'changeComp', changes: [] }
+  }
+}
+
 export const useEditorStore = defineStore('editor', () => {
   const doc = ref<FlowDoc>(loadFromStorage() ?? createSampleFlowDoc())
-  const navigation = ref<NavigationState>({ level: 'flow', systemId: null })
+  const navigation = ref<NavigationState>({ level: 'processes', processId: null, systemId: null })
   const selectedNodeId = ref<string | null>(null)
+  const flowView = ref<'graph' | 'lanes'>('graph')
+  const showAllComponents = ref(false)
 
   watch(
     doc,
@@ -35,24 +101,47 @@ export const useEditorStore = defineStore('editor', () => {
     { deep: true },
   )
 
+  const currentProcess = computed(() => {
+    if (!navigation.value.processId) return null
+    return doc.value.processes.find((p) => p.id === navigation.value.processId) ?? null
+  })
+
   const currentSystem = computed(() => {
     if (!navigation.value.systemId) return null
     return doc.value.systems.find((s) => s.id === navigation.value.systemId) ?? null
   })
 
   const currentGraph = computed(() => {
-    if (navigation.value.level === 'flow') return doc.value.flow
-    return currentSystem.value?.graph ?? { nodes: [], edges: [] }
+    if (navigation.value.level === 'system') {
+      return currentSystem.value?.graph ?? { nodes: [], edges: [] }
+    }
+    if (navigation.value.level === 'process') {
+      return currentProcess.value?.graph ?? { nodes: [], edges: [] }
+    }
+    return { nodes: [], edges: [] }
   })
 
   const breadcrumb = computed(() => {
-    const items: Array<{ label: string; level: NavigationLevel; systemId: string | null }> = [
-      { label: doc.value.name, level: 'flow', systemId: null },
-    ]
+    const items: Array<{
+      label: string
+      level: NavigationLevel
+      processId: string | null
+      systemId: string | null
+    }> = [{ label: doc.value.name, level: 'processes', processId: null, systemId: null }]
+
+    if (currentProcess.value && navigation.value.level !== 'processes') {
+      items.push({
+        label: currentProcess.value.name,
+        level: 'process',
+        processId: currentProcess.value.id,
+        systemId: null,
+      })
+    }
     if (navigation.value.level === 'system' && currentSystem.value) {
       items.push({
         label: currentSystem.value.name,
         level: 'system',
+        processId: navigation.value.processId,
         systemId: currentSystem.value.id,
       })
     }
@@ -63,13 +152,22 @@ export const useEditorStore = defineStore('editor', () => {
     return doc.value.tags.find((t) => t.id === tagId)
   }
 
-  function navigateToFlow() {
-    navigation.value = { level: 'flow', systemId: null }
+  function navigateToProcesses() {
+    navigation.value = { level: 'processes', processId: null, systemId: null }
+    selectedNodeId.value = null
+  }
+
+  function navigateToProcess(processId: string) {
+    navigation.value = { level: 'process', processId, systemId: null }
     selectedNodeId.value = null
   }
 
   function navigateToSystem(systemId: string) {
-    navigation.value = { level: 'system', systemId }
+    navigation.value = {
+      level: 'system',
+      processId: navigation.value.processId,
+      systemId,
+    }
     selectedNodeId.value = null
   }
 
@@ -78,22 +176,26 @@ export const useEditorStore = defineStore('editor', () => {
   }
 
   function updateGraphNodes(nodes: GraphNode[]) {
-    if (navigation.value.level === 'flow') {
-      doc.value.flow.nodes = nodes
+    if (navigation.value.level === 'system') {
+      const system = currentSystem.value
+      if (system) system.graph.nodes = nodes
       return
     }
-    const system = currentSystem.value
-    if (system) system.graph.nodes = nodes
+    const process = currentProcess.value
+    if (process) process.graph.nodes = nodes
   }
 
   function updateGraphEdges(edges: GraphEdge[]) {
-    if (navigation.value.level === 'flow') {
-      doc.value.flow.edges = edges
+    if (navigation.value.level === 'system') {
+      const system = currentSystem.value
+      if (system) system.graph.edges = edges
       return
     }
-    const system = currentSystem.value
-    if (system) system.graph.edges = edges
+    const process = currentProcess.value
+    if (process) process.graph.edges = edges
   }
+
+  // -- Tags --------------------------------------------------------------
 
   function addTag(tag: Omit<TagDef, 'id'> & { id?: string }) {
     doc.value.tags.push({ ...tag, id: tag.id ?? nanoid() })
@@ -109,24 +211,50 @@ export const useEditorStore = defineStore('editor', () => {
     for (const system of doc.value.systems) {
       system.query.conditions = system.query.conditions.filter((c) => c.tagId !== tagId)
       for (const action of system.actions) {
-        if (action.kind === 'addTags') {
-          action.tags = action.tags.filter((t) => t.tagId !== tagId)
-        }
+        if (action.kind === 'addTags') action.tags = action.tags.filter((t) => t.tagId !== tagId)
+        else if (action.kind === 'removeTags')
+          action.tagIds = action.tagIds.filter((id) => id !== tagId)
+        else if (action.kind === 'changeComp')
+          action.changes = action.changes.filter((c) => c.tagId !== tagId)
       }
+      for (const pin of system.outputs) pin.tagIds = pin.tagIds.filter((id) => id !== tagId)
+    }
+    for (const process of doc.value.processes) {
+      process.components = process.components.filter((id) => id !== tagId)
     }
   }
 
-  function addSystem(name = 'New System') {
+  // -- Processes ---------------------------------------------------------
+
+  function addProcess(name = 'New Process'): string {
+    const process: Process = { id: nanoid(), name, components: [], graph: { nodes: [], edges: [] } }
+    doc.value.processes.push(process)
+    return process.id
+  }
+
+  function updateProcess(processId: string, patch: Partial<Pick<Process, 'name' | 'components'>>) {
+    const process = doc.value.processes.find((p) => p.id === processId)
+    if (process) Object.assign(process, patch)
+  }
+
+  function removeProcess(processId: string) {
+    doc.value.processes = doc.value.processes.filter((p) => p.id !== processId)
+    if (navigation.value.processId === processId) navigateToProcesses()
+  }
+
+  // -- Systems -----------------------------------------------------------
+
+  function createSystemDef(name: string): System {
     const systemId = nanoid()
     const queryNodeId = `${systemId}-query`
     const textAction: Action = { id: nanoid(), kind: 'text', message: 'Hello' }
     const actionNodeId = `${systemId}-${textAction.id}`
-
-    const system: System = {
+    return {
       id: systemId,
       name,
       query: { conditions: [] },
       actions: [textAction],
+      outputs: [defaultOutputPin()],
       graph: {
         nodes: [
           {
@@ -145,47 +273,85 @@ export const useEditorStore = defineStore('editor', () => {
         edges: [{ id: `${systemId}-edge-0`, source: queryNodeId, target: actionNodeId }],
       },
     }
+  }
 
+  /** Create a new system and add a reference node to the given process. */
+  function addSystemToProcess(processId: string, name = 'New System'): string {
+    const process = doc.value.processes.find((p) => p.id === processId)
+    if (!process) return ''
+    const system = createSystemDef(name)
     doc.value.systems.push(system)
 
-    const y = 100 + doc.value.flow.nodes.length * 180
-    doc.value.flow.nodes.push({
-      id: `flow-${systemId}`,
+    const y = 80 + process.graph.nodes.length * 160
+    process.graph.nodes.push({
+      id: `${processId}-${system.id}`,
       type: 'system',
-      position: { x: 80, y },
-      data: { systemId, label: name },
+      position: { x: 120, y },
+      data: { systemId: system.id, label: name },
     })
+    return system.id
   }
 
   function updateSystem(systemId: string, patch: Partial<Pick<System, 'name' | 'query'>>) {
     const system = doc.value.systems.find((s) => s.id === systemId)
     if (system) Object.assign(system, patch)
     if (patch.name) {
-      const flowNode = doc.value.flow.nodes.find((n) => n.data.systemId === systemId)
-      if (flowNode) flowNode.data.label = patch.name
+      for (const process of doc.value.processes) {
+        for (const node of process.graph.nodes) {
+          if (node.data.systemId === systemId) node.data.label = patch.name
+        }
+      }
     }
   }
 
   function removeSystem(systemId: string) {
     doc.value.systems = doc.value.systems.filter((s) => s.id !== systemId)
-    doc.value.flow.nodes = doc.value.flow.nodes.filter((n) => n.data.systemId !== systemId)
-    doc.value.flow.edges = doc.value.flow.edges.filter((e) => {
-      const source = doc.value.flow.nodes.find((n) => n.id === e.source)
-      const target = doc.value.flow.nodes.find((n) => n.id === e.target)
-      return source?.data.systemId !== systemId && target?.data.systemId !== systemId
-    })
-    if (navigation.value.systemId === systemId) navigateToFlow()
+    for (const process of doc.value.processes) {
+      const removedNodeIds = new Set(
+        process.graph.nodes.filter((n) => n.data.systemId === systemId).map((n) => n.id),
+      )
+      process.graph.nodes = process.graph.nodes.filter((n) => n.data.systemId !== systemId)
+      process.graph.edges = process.graph.edges.filter(
+        (e) => !removedNodeIds.has(e.source) && !removedNodeIds.has(e.target),
+      )
+    }
+    if (navigation.value.systemId === systemId) {
+      if (navigation.value.processId) navigateToProcess(navigation.value.processId)
+      else navigateToProcesses()
+    }
   }
+
+  // -- Output pins -------------------------------------------------------
+
+  function addOutputPin(systemId: string) {
+    const system = doc.value.systems.find((s) => s.id === systemId)
+    if (!system) return
+    system.outputs.push(defaultOutputPin(`output ${system.outputs.length + 1}`))
+  }
+
+  function updateOutputPin(systemId: string, pinId: string, patch: Partial<OutputPin>) {
+    const system = doc.value.systems.find((s) => s.id === systemId)
+    const pin = system?.outputs.find((p) => p.id === pinId)
+    if (pin) Object.assign(pin, patch)
+  }
+
+  function removeOutputPin(systemId: string, pinId: string) {
+    const system = doc.value.systems.find((s) => s.id === systemId)
+    if (!system) return
+    system.outputs = system.outputs.filter((p) => p.id !== pinId)
+    const handle = `out-${pinId}`
+    for (const process of doc.value.processes) {
+      process.graph.edges = process.graph.edges.filter((e) => e.sourceHandle !== handle)
+    }
+  }
+
+  // -- Actions (inner system graph) -------------------------------------
 
   function addAction(systemId: string, kind: ActionKind) {
     const system = doc.value.systems.find((s) => s.id === systemId)
     if (!system) return
 
-    const action: Action =
-      kind === 'text'
-        ? { id: nanoid(), kind: 'text', message: 'New message' }
-        : { id: nanoid(), kind: 'addTags', tags: [] }
-
+    const action = createAction(kind)
     system.actions.push(action)
 
     const lastActionNode = [...system.graph.nodes]
@@ -199,11 +365,10 @@ export const useEditorStore = defineStore('editor', () => {
 
     system.graph.nodes.push({
       id: actionNodeId,
-      type: kind === 'text' ? 'textAction' : 'addTagsAction',
+      type: actionNodeType(kind),
       position: { x, y: 120 },
       data: { systemId, actionId: action.id, label: kind },
     })
-
     system.graph.edges.push({
       id: `${systemId}-edge-${nanoid()}`,
       source: sourceId,
@@ -225,7 +390,6 @@ export const useEditorStore = defineStore('editor', () => {
     const nodeId = `${systemId}-${actionId}`
     system.actions = system.actions.filter((a) => a.id !== actionId)
     system.graph.nodes = system.graph.nodes.filter((n) => n.id !== nodeId)
-    system.graph.edges = system.graph.edges.filter((e) => e.source !== nodeId && e.target !== nodeId)
 
     const queryNode = system.graph.nodes.find((n) => n.type === 'query')
     const remainingActions = system.graph.nodes.filter((n) => n.type !== 'query')
@@ -242,19 +406,20 @@ export const useEditorStore = defineStore('editor', () => {
     }
   }
 
+  // -- Import / export ---------------------------------------------------
+
   function exportJson(): string {
     return JSON.stringify(doc.value, null, 2)
   }
 
   function importJson(json: string) {
-    const parsed = JSON.parse(json) as FlowDoc
-    doc.value = parsed
-    navigateToFlow()
+    doc.value = migrateDoc(JSON.parse(json))
+    navigateToProcesses()
   }
 
   function resetToSample() {
     doc.value = createSampleFlowDoc()
-    navigateToFlow()
+    navigateToProcesses()
   }
 
   const selectedNode = computed(() => {
@@ -270,23 +435,35 @@ export const useEditorStore = defineStore('editor', () => {
       relation: [],
       timer: [],
     }
-    for (const tag of doc.value.tags) {
-      groups[tag.type].push(tag)
-    }
+    for (const tag of doc.value.tags) groups[tag.type].push(tag)
     return groups
   })
+
+  function setFlowView(view: 'graph' | 'lanes') {
+    flowView.value = view
+  }
+
+  function setShowAllComponents(value: boolean) {
+    showAllComponents.value = value
+  }
 
   return {
     doc,
     navigation,
     selectedNodeId,
+    flowView,
+    showAllComponents,
+    setFlowView,
+    setShowAllComponents,
+    currentProcess,
     currentSystem,
     currentGraph,
     breadcrumb,
     selectedNode,
     tagsByType,
     getTagById,
-    navigateToFlow,
+    navigateToProcesses,
+    navigateToProcess,
     navigateToSystem,
     selectNode,
     updateGraphNodes,
@@ -294,9 +471,15 @@ export const useEditorStore = defineStore('editor', () => {
     addTag,
     updateTag,
     removeTag,
-    addSystem,
+    addProcess,
+    updateProcess,
+    removeProcess,
+    addSystemToProcess,
     updateSystem,
     removeSystem,
+    addOutputPin,
+    updateOutputPin,
+    removeOutputPin,
     addAction,
     updateAction,
     removeAction,

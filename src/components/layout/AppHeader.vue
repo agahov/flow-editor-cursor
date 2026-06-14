@@ -1,16 +1,27 @@
 <script setup lang="ts">
 import { ref } from 'vue'
-import { ChevronRight, Download, Upload, Plus, RotateCcw } from 'lucide-vue-next'
+import { ChevronRight, Download, Upload, Plus, RotateCcw, Network, Rows3, Eye, EyeOff } from 'lucide-vue-next'
 import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
 import { useEditorStore } from '@/stores/editor'
+import type { NavigationLevel } from '@/types/flow'
 
 const store = useEditorStore()
 const fileInput = ref<HTMLInputElement | null>(null)
 
-function navigate(item: { level: 'flow' | 'system'; systemId: string | null }) {
-  if (item.level === 'flow') store.navigateToFlow()
-  else if (item.systemId) store.navigateToSystem(item.systemId)
+function navigate(item: { level: NavigationLevel; processId: string | null; systemId: string | null }) {
+  if (item.level === 'processes') store.navigateToProcesses()
+  else if (item.level === 'process' && item.processId) store.navigateToProcess(item.processId)
+  else if (item.level === 'system' && item.systemId) store.navigateToSystem(item.systemId)
+}
+
+function addProcess() {
+  const id = store.addProcess()
+  store.navigateToProcess(id)
+}
+
+function addSystem() {
+  if (store.navigation.processId) store.addSystemToProcess(store.navigation.processId)
 }
 
 function exportJson() {
@@ -62,14 +73,54 @@ function onImport(event: Event) {
     </nav>
 
     <div class="ml-auto flex items-center gap-2 shrink-0">
+      <!-- Process-level controls -->
+      <template v-if="store.navigation.level === 'process'">
+        <div class="flex items-center rounded-md border p-0.5">
+          <button
+            class="flex items-center gap-1 rounded px-2 py-1 text-xs"
+            :class="store.flowView === 'graph' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground'"
+            title="Graph view"
+            @click="store.setFlowView('graph')"
+          >
+            <Network class="h-3.5 w-3.5" />
+            Graph
+          </button>
+          <button
+            class="flex items-center gap-1 rounded px-2 py-1 text-xs"
+            :class="store.flowView === 'lanes' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground'"
+            title="Component lanes view"
+            @click="store.setFlowView('lanes')"
+          >
+            <Rows3 class="h-3.5 w-3.5" />
+            Lanes
+          </button>
+        </div>
+
+        <Button
+          v-if="store.flowView === 'graph'"
+          size="sm"
+          variant="ghost"
+          :title="store.showAllComponents ? 'Showing all components' : 'Showing process components only'"
+          @click="store.setShowAllComponents(!store.showAllComponents)"
+        >
+          <component :is="store.showAllComponents ? Eye : EyeOff" class="h-3.5 w-3.5" />
+          {{ store.showAllComponents ? 'All' : 'Process' }}
+        </Button>
+
+        <Button size="sm" variant="outline" @click="addSystem">
+          <Plus class="h-3.5 w-3.5" />
+          System
+        </Button>
+      </template>
+
       <Button
-        v-if="store.navigation.level === 'flow'"
+        v-if="store.navigation.level === 'processes'"
         size="sm"
         variant="outline"
-        @click="store.addSystem()"
+        @click="addProcess"
       >
         <Plus class="h-3.5 w-3.5" />
-        System
+        Process
       </Button>
 
       <Button size="sm" variant="outline" @click="exportJson">

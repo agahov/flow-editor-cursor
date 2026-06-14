@@ -23,6 +23,9 @@ export interface GraphEdge {
   id: string
   source: string
   target: string
+  type?: string
+  sourceHandle?: string
+  targetHandle?: string
 }
 
 export type SubGraph = {
@@ -30,17 +33,27 @@ export type SubGraph = {
   edges: GraphEdge[]
 }
 
+/** A named group of systems describing a process; owns the connections drawn between its members. */
+export interface Process {
+  id: string
+  name: string
+  /** Declared tag ids this process is "about" (used as a visual lens). */
+  components: string[]
+  graph: SubGraph
+}
+
 export interface FlowDoc {
   id: string
   name: string
   tags: TagDef[]
   systems: System[]
-  flow: SubGraph
+  processes: Process[]
 }
 
-export type NavigationLevel = 'flow' | 'system'
+export type NavigationLevel = 'processes' | 'process' | 'system'
 
 export interface NavigationState {
   level: NavigationLevel
+  processId: string | null
   systemId: string | null
 }

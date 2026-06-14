@@ -1,45 +1,61 @@
 import { nanoid } from 'nanoid'
-import type { FlowDoc } from '@/types/flow'
-import type { System } from '@/types/systems'
+import type { FlowDoc, GraphNode, GraphEdge, Process } from '@/types/flow'
+import type { Action, OutputPin, System } from '@/types/systems'
 
-function createSystem(
-  name: string,
-  queryTagIds: string[],
-  actions: System['actions'],
-  graphLayout: { queryX: number; actionXs: number[] },
-): System {
+interface SystemSpec {
+  name: string
+  queryHas?: string[]
+  queryAbsent?: string[]
+  actions: Action[]
+  outputs: OutputPin[]
+}
+
+function buildSystem(spec: SystemSpec): System {
   const systemId = nanoid()
   const queryNodeId = `${systemId}-query`
-  const actionNodeIds = actions.map((a) => `${systemId}-${a.id}`)
-
-  const nodes = [
+  const nodes: GraphNode[] = [
     {
       id: queryNodeId,
       type: 'query',
-      position: { x: graphLayout.queryX, y: 120 },
+      position: { x: 40, y: 120 },
       data: { systemId, label: 'Query' },
     },
-    ...actions.map((action, i) => ({
-      id: actionNodeIds[i]!,
-      type: action.kind === 'text' ? 'textAction' : 'addTagsAction',
-      position: { x: graphLayout.actionXs[i] ?? 300 + i * 220, y: 120 },
-      data: { systemId, actionId: action.id, label: action.kind },
-    })),
   ]
+  const edges: GraphEdge[] = []
 
-  const edges = actionNodeIds.map((actionNodeId, i) => ({
-    id: `${systemId}-edge-${i}`,
-    source: i === 0 ? queryNodeId : actionNodeIds[i - 1]!,
-    target: actionNodeId,
-  }))
+  spec.actions.forEach((action, i) => {
+    const actionNodeId = `${systemId}-${action.id}`
+    nodes.push({
+      id: actionNodeId,
+      type:
+        action.kind === 'text'
+          ? 'textAction'
+          : action.kind === 'addTags'
+            ? 'addTagsAction'
+            : action.kind === 'removeTags'
+              ? 'removeTagsAction'
+              : 'changeCompAction',
+      position: { x: 280 + i * 220, y: 120 },
+      data: { systemId, actionId: action.id, label: action.kind },
+    })
+    edges.push({
+      id: `${systemId}-edge-${i}`,
+      source: i === 0 ? queryNodeId : `${systemId}-${spec.actions[i - 1]!.id}`,
+      target: actionNodeId,
+    })
+  })
 
   return {
     id: systemId,
-    name,
+    name: spec.name,
     query: {
-      conditions: queryTagIds.map((tagId) => ({ tagId, mode: 'has' as const })),
+      conditions: [
+        ...(spec.queryHas ?? []).map((tagId) => ({ tagId, mode: 'has' as const })),
+        ...(spec.queryAbsent ?? []).map((tagId) => ({ tagId, mode: 'absent' as const })),
+      ],
     },
-    actions,
+    actions: spec.actions,
+    outputs: spec.outputs,
     graph: { nodes, edges },
   }
 }
@@ -56,6 +72,15 @@ export function createSampleFlowDoc(): FlowDoc {
       ],
     },
     {
+      id: 'tag-velocity',
+      name: 'velocity',
+      type: 'data' as const,
+      fields: [
+        { name: 'x', kind: 'number' as const },
+        { name: 'y', kind: 'number' as const },
+      ],
+    },
+    {
       id: 'tag-health',
       name: 'health',
       type: 'data' as const,
@@ -63,69 +88,97 @@ export function createSampleFlowDoc(): FlowDoc {
     },
     { id: 'tag-destroyed', name: 'destroyed', type: 'marker' as const },
     { id: 'tag-jump', name: 'jump', type: 'state' as const, stateGroup: 'movement' },
-    { id: 'tag-attack', name: 'attack', type: 'state' as const, stateGroup: 'combat' },
-    { id: 'tag-parent', name: 'parent', type: 'relation' as const },
-    { id: 'tag-child', name: 'child', type: 'relation' as const },
-    { id: 'tag-timer', name: 'timer', type: 'timer' as const, duration: 1000 },
+    { id: 'tag-grounded', name: 'grounded', type: 'state' as const, stateGroup: 'movement' },
   ]
 
-  const textAction1 = { id: nanoid(), kind: 'text' as const, message: 'Entity matched query' }
-  const addTagsAction1 = {
+  // --- Movement process: two systems sharing position + velocity --------
+  const accelOutPin: OutputPin = { id: nanoid(), label: 'moving', tagIds: ['tag-position', 'tag-velocity'] }
+  const acceleration = buildSystem({
+    name: 'Acceleration',
+    queryHas: ['tag-velocity'],
+    actions: [
+      { id: nanoid(), kind: 'changeComp', changes: [{ tagId: 'tag-velocity' }] },
+    ],
+    outputs: [accelOutPin],
+  })
+
+  const smoothOutPin: OutputPin = { id: nanoid(), label: 'output', tagIds: [] }
+  const smoothMovement = buildSystem({
+    name: 'Smooth Movement',
+    queryHas: ['tag-position', 'tag-velocity'],
+    actions: [
+      { id: nanoid(), kind: 'changeComp', changes: [{ tagId: 'tag-position' }] },
+    ],
+    outputs: [smoothOutPin],
+  })
+
+  const movement: Process = {
     id: nanoid(),
-    kind: 'addTags' as const,
-    tags: [{ tagId: 'tag-destroyed' }],
+    name: 'Movement',
+    components: ['tag-position', 'tag-velocity'],
+    graph: {
+      nodes: [
+        {
+          id: `move-${acceleration.id}`,
+          type: 'system',
+          position: { x: 120, y: 80 },
+          data: { systemId: acceleration.id, label: acceleration.name },
+        },
+        {
+          id: `move-${smoothMovement.id}`,
+          type: 'system',
+          position: { x: 120, y: 320 },
+          data: { systemId: smoothMovement.id, label: smoothMovement.name },
+        },
+      ],
+      edges: [
+        {
+          id: `move-edge-1`,
+          source: `move-${acceleration.id}`,
+          target: `move-${smoothMovement.id}`,
+          type: 'dataFlow',
+          sourceHandle: `out-${accelOutPin.id}`,
+          targetHandle: 'in',
+        },
+      ],
+    },
   }
 
-  const textAction2 = { id: nanoid(), kind: 'text' as const, message: 'Player is jumping' }
-  const addTagsAction2 = {
+  // --- Lifecycle process: a single health system -----------------------
+  const healthOutPin: OutputPin = { id: nanoid(), label: 'output', tagIds: [] }
+  const healthCheck = buildSystem({
+    name: 'Health Check',
+    queryHas: ['tag-health'],
+    queryAbsent: ['tag-destroyed'],
+    actions: [
+      { id: nanoid(), kind: 'addTags', tags: [{ tagId: 'tag-destroyed' }] },
+      { id: nanoid(), kind: 'text', message: 'Entity destroyed' },
+    ],
+    outputs: [healthOutPin],
+  })
+
+  const lifecycle: Process = {
     id: nanoid(),
-    kind: 'addTags' as const,
-    tags: [{ tagId: 'tag-timer', values: { duration: 500 } }],
-  }
-
-  const healthSystem = createSystem(
-    'Health Check',
-    ['tag-health'],
-    [textAction1, addTagsAction1],
-    { queryX: 40, actionXs: [280, 500] },
-  )
-
-  const jumpSystem = createSystem(
-    'Jump Handler',
-    ['tag-jump', 'tag-position'],
-    [textAction2, addTagsAction2],
-    { queryX: 40, actionXs: [280, 500] },
-  )
-
-  const flow = {
-    nodes: [
-      {
-        id: `flow-${healthSystem.id}`,
-        type: 'system',
-        position: { x: 80, y: 100 },
-        data: { systemId: healthSystem.id, label: healthSystem.name },
-      },
-      {
-        id: `flow-${jumpSystem.id}`,
-        type: 'system',
-        position: { x: 80, y: 320 },
-        data: { systemId: jumpSystem.id, label: jumpSystem.name },
-      },
-    ],
-    edges: [
-      {
-        id: 'flow-edge-1',
-        source: `flow-${healthSystem.id}`,
-        target: `flow-${jumpSystem.id}`,
-      },
-    ],
+    name: 'Lifecycle',
+    components: ['tag-health', 'tag-destroyed'],
+    graph: {
+      nodes: [
+        {
+          id: `life-${healthCheck.id}`,
+          type: 'system',
+          position: { x: 120, y: 120 },
+          data: { systemId: healthCheck.id, label: healthCheck.name },
+        },
+      ],
+      edges: [],
+    },
   }
 
   return {
     id: nanoid(),
     name: 'Main Flow',
     tags,
-    systems: [healthSystem, jumpSystem],
-    flow,
+    systems: [acceleration, smoothMovement, healthCheck],
+    processes: [movement, lifecycle],
   }
 }
