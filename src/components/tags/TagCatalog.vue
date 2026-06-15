@@ -41,8 +41,8 @@ const totalTags = computed(() => store.doc.tags.length)
 </script>
 
 <template>
-  <Card class="border-0 shadow-none rounded-none h-full">
-    <CardHeader class="pb-3">
+  <Card class="border-0 shadow-none rounded-none h-full flex flex-col">
+    <CardHeader class="pb-3 shrink-0">
       <div class="flex items-center justify-between">
         <CardTitle class="text-sm">Tags ({{ totalTags }})</CardTitle>
         <Button size="sm" variant="outline" @click="openCreate">
@@ -51,7 +51,7 @@ const totalTags = computed(() => store.doc.tags.length)
         </Button>
       </div>
     </CardHeader>
-    <CardContent class="space-y-4 overflow-y-auto max-h-[calc(100vh-180px)]">
+    <CardContent class="space-y-4 overflow-y-auto flex-1 min-h-0">
       <div v-for="type in tagTypes" :key="type">
         <p class="text-xs font-medium text-muted-foreground mb-2 uppercase tracking-wide">
           {{ TAG_TYPE_LABELS[type] }}

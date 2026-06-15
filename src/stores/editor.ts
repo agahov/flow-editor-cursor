@@ -275,6 +275,28 @@ export const useEditorStore = defineStore('editor', () => {
     }
   }
 
+  function systemInProcess(processId: string, systemId: string): boolean {
+    const process = doc.value.processes.find((p) => p.id === processId)
+    if (!process) return false
+    return process.graph.nodes.some((n) => n.type === 'system' && n.data.systemId === systemId)
+  }
+
+  /** Add a reference node for an already-existing system to the given process. */
+  function addExistingSystemToProcess(processId: string, systemId: string) {
+    const process = doc.value.processes.find((p) => p.id === processId)
+    const system = doc.value.systems.find((s) => s.id === systemId)
+    if (!process || !system) return
+    if (systemInProcess(processId, systemId)) return
+
+    const y = 80 + process.graph.nodes.length * 160
+    process.graph.nodes.push({
+      id: `${processId}-${systemId}`,
+      type: 'system',
+      position: { x: 120, y },
+      data: { systemId, label: system.name },
+    })
+  }
+
   /** Create a new system and add a reference node to the given process. */
   function addSystemToProcess(processId: string, name = 'New System'): string {
     const process = doc.value.processes.find((p) => p.id === processId)
@@ -290,6 +312,22 @@ export const useEditorStore = defineStore('editor', () => {
       data: { systemId: system.id, label: name },
     })
     return system.id
+  }
+
+  /** Remove a system's reference node from a process, keeping the system definition. */
+  function removeSystemFromProcess(processId: string, systemId: string) {
+    const process = doc.value.processes.find((p) => p.id === processId)
+    if (!process) return
+    const removedNodeIds = new Set(
+      process.graph.nodes.filter((n) => n.data.systemId === systemId).map((n) => n.id),
+    )
+    process.graph.nodes = process.graph.nodes.filter((n) => n.data.systemId !== systemId)
+    process.graph.edges = process.graph.edges.filter(
+      (e) => !removedNodeIds.has(e.source) && !removedNodeIds.has(e.target),
+    )
+    if (navigation.value.level === 'system' && navigation.value.systemId === systemId) {
+      navigateToProcess(processId)
+    }
   }
 
   function updateSystem(systemId: string, patch: Partial<Pick<System, 'name' | 'query'>>) {
@@ -474,7 +512,10 @@ export const useEditorStore = defineStore('editor', () => {
     addProcess,
     updateProcess,
     removeProcess,
+    systemInProcess,
+    addExistingSystemToProcess,
     addSystemToProcess,
+    removeSystemFromProcess,
     updateSystem,
     removeSystem,
     addOutputPin,

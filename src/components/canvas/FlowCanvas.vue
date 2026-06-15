@@ -102,7 +102,9 @@ function onEdgesChange(changes: EdgeChange[]) {
 function handleNodeRemove(nodeId: string) {
   if (isProcessLevel.value) {
     const node = store.currentGraph.nodes.find((n) => n.id === nodeId)
-    if (node?.data.systemId) store.removeSystem(node.data.systemId)
+    if (node?.data.systemId && store.navigation.processId) {
+      store.removeSystemFromProcess(store.navigation.processId, node.data.systemId)
+    }
     return
   }
   const node = store.currentGraph.nodes.find((n) => n.id === nodeId)
