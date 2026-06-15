@@ -13,6 +13,10 @@ function isInProcess(systemId: string): boolean {
   return processId.value ? store.systemInProcess(processId.value, systemId) : false
 }
 
+function isSelected(systemId: string): boolean {
+  return !!processId.value && store.selectedNodeId === `${processId.value}-${systemId}`
+}
+
 function addToProcess(systemId: string) {
   if (processId.value) store.addExistingSystemToProcess(processId.value, systemId)
 }
@@ -22,7 +26,9 @@ function removeFromProcess(systemId: string) {
 }
 
 function createSystem() {
-  if (processId.value) store.addSystemToProcess(processId.value)
+  if (!processId.value) return
+  const systemId = store.addSystemToProcess(processId.value)
+  store.selectNode(`${processId.value}-${systemId}`)
 }
 
 function deleteSystem(systemId: string, name: string) {
@@ -56,7 +62,10 @@ function deleteSystem(systemId: string, name: string) {
         v-for="system in store.doc.systems"
         :key="system.id"
         class="flex items-center justify-between rounded-md border px-2 py-1.5 hover:bg-muted/50 group"
-        :class="isInProcess(system.id) ? 'border-primary/40 bg-primary/5' : ''"
+        :class="[
+          isInProcess(system.id) ? 'border-primary/40 bg-primary/5' : '',
+          isSelected(system.id) ? 'ring-1 ring-primary' : '',
+        ]"
       >
         <div class="flex items-center gap-2 min-w-0">
           <Boxes class="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
