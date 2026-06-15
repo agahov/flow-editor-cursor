@@ -24,17 +24,18 @@ function isDim(strand: Strand): boolean {
   return !comps.includes(strand.tagId)
 }
 
-const baseline = computed(
-  () =>
-    getSmoothStepPath({
-      sourceX: props.sourceX,
-      sourceY: props.sourceY,
-      sourcePosition: props.sourcePosition,
-      targetX: props.targetX,
-      targetY: props.targetY,
-      targetPosition: props.targetPosition,
-    })[0],
+const basePath = computed(() =>
+  getSmoothStepPath({
+    sourceX: props.sourceX,
+    sourceY: props.sourceY,
+    sourcePosition: props.sourcePosition,
+    targetX: props.targetX,
+    targetY: props.targetY,
+    targetPosition: props.targetPosition,
+  }),
 )
+
+const baseline = computed(() => basePath.value[0])
 
 const GAP = 5
 
@@ -53,17 +54,7 @@ const strandPaths = computed(() =>
   }),
 )
 
-const labelPos = computed(() => {
-  const [, x, y] = getSmoothStepPath({
-    sourceX: props.sourceX,
-    sourceY: props.sourceY,
-    sourcePosition: props.sourcePosition,
-    targetX: props.targetX,
-    targetY: props.targetY,
-    targetPosition: props.targetPosition,
-  })
-  return { x, y }
-})
+const labelPos = computed(() => ({ x: basePath.value[1], y: basePath.value[2] }))
 
 // Components worth labelling: anything that changed.
 const labelStrands = computed(() =>

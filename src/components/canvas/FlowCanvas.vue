@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { VueFlow, type Connection, type Node, type Edge, type NodeChange, type EdgeChange } from '@vue-flow/core'
 import { Background } from '@vue-flow/background'
 import { Controls } from '@vue-flow/controls'
@@ -28,12 +28,7 @@ const flowResult = computed(() =>
     : null,
 )
 
-const nodes = computed<Node[]>(() =>
-  store.currentGraph.nodes.map((n) => ({
-    ...n,
-    selected: n.id === store.selectedNodeId,
-  })),
-)
+const nodes = computed<Node[]>(() => store.currentGraph.nodes)
 
 const edges = computed<Edge[]>(() =>
   store.currentGraph.edges.map((e) => {
@@ -77,16 +72,24 @@ function onConnect(connection: Connection) {
   store.updateGraphEdges(nextEdges)
 }
 
-function onNodeDragStop({ node }: { node: Node }) {
+const isDragging = ref(false)
+
+function onNodeDragStart() {
+  isDragging.value = true
+}
+
+function onNodeDragStop({ nodes: draggedNodes }: { nodes: Node[] }) {
+  isDragging.value = false
+  const moved = new Map(draggedNodes.map((n) => [n.id, n.position]))
   const updated = store.currentGraph.nodes.map((n) =>
-    n.id === node.id ? { ...n, position: node.position } : n,
+    moved.has(n.id) ? { ...n, position: moved.get(n.id)! } : n,
   )
   store.updateGraphNodes(updated)
 }
 
 function onNodesChange(changes: NodeChange[]) {
   for (const change of changes) {
-    if (change.type === 'select' && change.selected) store.selectNode(change.id)
+    if (change.type === 'select') store.selectNode(change.selected ? change.id : null)
     if (change.type === 'remove') handleNodeRemove(change.id)
   }
 }
@@ -144,6 +147,7 @@ watch(
       :max-zoom="2"
       fit-view-on-init
       @connect="onConnect"
+      @node-drag-start="onNodeDragStart"
       @node-drag-stop="onNodeDragStop"
       @nodes-change="onNodesChange"
       @edges-change="onEdgesChange"
@@ -152,7 +156,7 @@ watch(
     >
       <Background pattern-color="#aaa" :gap="16" />
       <Controls />
-      <MiniMap />
+      <MiniMap v-if="!isDragging" />
 
       <template #node-system="nodeProps">
         <SystemNode v-bind="nodeProps" />

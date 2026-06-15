@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { nanoid } from 'nanoid'
 import { computed, ref, watch } from 'vue'
+import { useDebounceFn } from '@vueuse/core'
 import { createSampleFlowDoc } from '@/lib/sample-data'
 import type {
   GraphEdge,
@@ -93,10 +94,12 @@ export const useEditorStore = defineStore('editor', () => {
   const flowView = ref<'graph' | 'lanes'>('graph')
   const showAllComponents = ref(false)
 
+  const debouncedSave = useDebounceFn((value: FlowDoc) => saveToStorage(value), 400)
+
   watch(
     doc,
     (value) => {
-      saveToStorage(value)
+      debouncedSave(value)
     },
     { deep: true },
   )
